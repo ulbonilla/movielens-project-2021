@@ -1,0 +1,831 @@
+---
+title: "Data Science Capstone MovieLens project"
+author: "Ulises Bonilla"
+date: "21/5/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo=FALSE,
+                      message=FALSE,
+                      warning = FALSE)
+
+rm(list=ls())
+
+path <- "//MyCloudEX2Ultra/HDulises/backup1/trabajo/IFT/cursos/EDX/harvard x/edx data science capstone/movielens/"
+
+knitr::opts_knit$set(root.dir = path)
+
+Sys.setlocale("LC_TIME", "English")
+```
+
+```{r libraries, collapse=TRUE}
+if (!require("tidyverse")) install.packages("tidyverse")
+library("tidyverse")
+if (!require("lubridate")) install.packages("lubridate")
+library("lubridate")
+if (!require("FactoMineR")) install.packages("FactoMineR")
+library("FactoMineR")# for MCA
+if (!require("factoextra")) install.packages("factoextra")
+library("factoextra") # for MCA
+if (!require("caret")) install.packages("caret")
+library("caret")
+if (!require("knitr")) install.packages("knitr")
+library("knitr")
+if (!require("rlang")) install.packages("rlang")
+library("rlang")
+if (!require("Hmisc") ) install.packages("Hmisc")
+library("Hmisc") # for correlation table
+if (!require("e1071") ) install.packages("e1071")
+library("e1071") # for skewness and kurtossi function
+
+```
+
+```{r data, include=FALSE}
+# this chunk is always evaluated
+edx_data <- read_csv(file = paste0(path, "edx_dataset.csv")) 
+
+str(edx_data)
+
+```
+
+## Introduction ##
+
+For this project, I will create a movie recommendation system using the `MovieLens` dataset. The objective of this project is to train a machine learning algorithm using a large data set, the training set, to predict the rating of movies. The model is ultimately tested on a second data set, the validation set. However, cross validation is recommended prior to making use of the validation set. The metric employed for this task is the RMSE. That is, the RMSE will be used to evaluate how close the predictions are to the true values in the validation set.
+
+The report of this project is organized as follows. First, the present section, the Introduction, describes the data and the goal of the project. Additionally, the same section includes a quiz about the data, which helped me familiarize with the data. Second, the Analysis section addresses data cleaning, data wrangling and feature engineering, the main exploration and visualizations of the data, and finally the models. Third, the Results section simply provide the outcome of the project in terms of the chosen metric. And, lastly, the Conclusion section gives a brief summary of the report, its limitations and the work that could be undertaken in the future.
+
+### Data ###
+
+Here is a glimpse of how the original data looks:
+
+```{r table 1}
+# this chunk is always evaluated
+kable(head(edx_data[-1]), align = "ccc")
+
+```
+
+As observed above, the columns in the data are:
+
+* `userId` <integer> that contains the unique identification number for each user.
+* `movieId` <numeric> that contains the unique identification number for each movie.
+* `rating` <numeric> that contains the rating of one movie by one user. Ratings are made on a 5-Star scale with
+half-star increments.
+* `timestamp` <integer> that contains the timestamp for one specific rating provided by one user.
+* `title` <character> that contains the title of each movie including the year of the release.
+* `genres` <character> that contains a list of pipe-separated of genre of each movie.
+
+At a first glance, what stands out is that the `genres` column is not one-to-one, in the sense that a single movie may have more than one genre. Another thing that I notice is that the `title` column actually contains two pieces of information, the title and the date of the movie in parenthesis. Lastly, I also take into consideration that the `timestamp` column contains data such as the date and time at which each review was done.
+
+### Quiz ###
+
+To get to know the data better I answer the following quiz of 8 questions.
+
+1. How many rows and columns are there in the edx dataset?
+
+   *The data set has `r formatC(nrow(edx_data), big.mark=",")` rows and  `r ncol(edx_data)` columns.*
+   
+   In principle, this fact could represent a problem due to computing limitations.
+   
+```{r question 2}
+# this chunk is always evaluated
+temp <- subset(data.frame(table(edx_data$rating)), Var1==0 | Var1==3)
+
+```
+2. How many zeros were given as ratings in the edx dataset? How many threes were given as ratings in the edx dataset?
+
+   *There are no zeros given as ratings in the data set. There are `r formatC(temp$Freq[which(temp$Var1==3)], big.mark=",")` threes given as ratings in the data set.*
+   
+   These are good news because zeros may create issues with the data. Also, that many threes could hint towards the location of the mean in the data.
+
+3. How many different movies are in the edx dataset?
+
+   *There are `r formatC(length(unique(edx_data$movieId)), big.mark=",")` different movies in the data.*
+
+4. How many different users are in the edx dataset?
+
+   *There are `r formatC(length(unique(edx_data$userId)), big.mark=",")` different users in the data.*
+   
+   Despite that movies and users are not a continuous variable, but a factor, there are way too many of each to be taken as factor/categorical features. Instead, a mean deviation approach would be a better choice.
+
+5. How many movie ratings are in each of the following genres in the edx dataset?
+
+- *Drama: there are `r formatC(sum(str_detect(edx_data$genres, "Drama")), big.mark=",")` movie ratings in the Drama genre.*
+- *Comedy: there are `r formatC(sum(str_detect(edx_data$genres, "Comedy")), big.mark=",")` movie ratings in the Comedy genre.*
+- *Thriller: there are `r formatC(sum(str_detect(edx_data$genres, "Thriller")), big.mark=",")` movie ratings in the Thriller genre.*
+- *Romance: there are `r formatC(sum(str_detect(edx_data$genres, "Romance")), big.mark=",")` movie ratings in the Romance genre.*
+  
+  In principle, it seems that, unlike users or movies, genres could be treated as categorical. However, this is not certain.
+
+```{r question 6}
+# this chunk is always evaluated
+temp <- edx_data %>% 
+        filter(str_detect(title, 
+                          "Forrest Gump|Jurassic Park|Pulp Fiction|Shawshank Redemption|Speed 2: Cruise Control")) %>%
+        group_by(title) %>% 
+        summarise(count = n()) %>% 
+        arrange(desc(count))
+
+```
+6. Which movie has the greatest number of ratings?
+   
+   *The movie which has the greatest number of ratings among Forrest Gump,Jurassic Park, Pulp Fiction, Shawshank Redemption and Speed 2: Cruise Control is `r temp$title[1]`.*
+
+```{r question 7}
+# this chunk is always evaluated
+temp <- edx_data %>% 
+        group_by(rating)%>% 
+        summarise(count = n()) %>% 
+        arrange(desc(count))
+
+```  
+7. What are the five most given ratings in order from most to least?
+   
+   *The most given rating is `r temp$rating[1]`, followed by `r temp$rating[2]`,`r temp$rating[3]`,`r temp$rating[4]` and `r temp$rating[5]` in that order.*
+   
+   These are not necessarily good news. If the ratings in `rating` are too unbalanced, the models might be biased towards the most common ratings in the sample.
+   
+```{r question 8}
+# this chunk is always evaluated
+temp <- edx_data %>% 
+        mutate(half = ifelse(str_detect(as.character(rating), ".5"), "half", "no half")) %>% 
+        group_by(half)%>% 
+        summarise(count = n()) %>% 
+        arrange(desc(count))
+
+```  
+8. True or False: In general, half star ratings are less common than whole star ratings.
+   
+   *It is True. There are `r formatC(temp$count[2], big.mark=",")` half star ratings and `r formatC(temp$count[1], big.mark=",")` whole star ratings.*
+   
+   The answer to this last question might suggest a heuristic bias. People are naturally drawn towards whole numbers. Yet, I do not think this observation could result into a significant feature for the models.
+   
+## Analysis ##
+
+I start this section by exploring the target variable `rating`. I explore this variable first because others may require some manipulation, which has not been done yet. The following graph shows the percentage of reviews by rating. It confirms question 8 in that there are less half star ratings than whole star ratings. Moreover, it is also observed, as suggested by the answer in question 7, that higher ratings are more common than lower ratings. In particular, the most common rating is 4.
+
+```{r graph1}
+
+edx_data$rating %>% 
+  table %>% 
+  as.data.frame() %>% 
+  set_names(c("Rating", "Total")) %>% 
+  mutate(Percentage = Total/sum(Total, na.rm = TRUE)*100,
+         Percentage_format = format(round( Percentage,2), nsmall =2, big.mark = ","),
+         Rating = factor(Rating)) %>%
+  ggplot(aes(x= Rating, y = Percentage)) +
+  geom_bar(aes(fill = Rating), stat="identity") +
+  geom_text(aes(label=Percentage_format),  vjust = -.3, size=2.5) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  xlab("Ratings") +
+  ylab("Percentage (%)") +
+  ggtitle(label = "Percentage of movie reviews by rating")
+
+rm(edx_data, temp)
+
+```
+
+Given the insights obtained so far, i first proceed to do feature engineering using all the columns in the data, with the exception of `genre` (later, I will also make use of it). In the next sub-section I will discuss the models. But for now I will only say that the first model is a linear model using four regressors for rating, without using the data on genre. The second and third models do require to make use of the data in the `genre` column. To do so, i will create a data set of dummy variables for each of the genres (as columns).[^1] But, more on these later. Finally, the third model is an variation from the first model, but adding a summarized version of the genres data.
+
+### Feature engineering ###
+
+The features used in the first model are:
+
+* `movie_mean` <numeric>, is the difference between each movie´s mean rating and the overall average rating
+* `user_mean` <numeric>, is the difference between each user´s mean rating and the overall average rating
+* `year_dif_mean` <numeric>, is the mean difference in years between the year of the review and the year of the movie
+* `year_mean` <numeric>, is the difference between each movie´s mean rating at each (release) year and the overall average rating.
+* `movie_user` <numeric>, is simply the interaction (multiplication) between the `movie_mean` and `user_mean`.
+
+The approach is to use the least number of features as possible, that could still maximize the predictability. The proposed features are justified as follows. The selection of the first and second features (`movie_mean` and `user_mean`) is straight forward because they aim to capture user and movie specific biases, respectively. The third feature (`year_dif_mean`) is meant to capture a generational bias towards movies. That is, tries to capture differences in the preferences of movies across time. The fourth feature (`year_mean`) aims to capture a year specific bias. These last could be relevant when the film industry as a whole under performs during a specific year. Finally, the last feature (`movie_user`) is meant to capture the interaction between users and movies specific biases. I cannot compute user-movie mean because i will not be able to match both user and movie in the validation data. However, I can match user and movie separately and then calculate their interaction, which is the next best thing.
+
+```{r feature engineering I}
+# This chunk of code is only evaluated once
+
+file <- str_c(path, "edx_data1.csv") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_dataset.csv")) 
+
+  # from userId and movieId (and rating) get movie_mean, user_mean and movie_user
+  
+  mean_total <- mean(edx_data$rating)
+  
+  saveRDS(mean_total, str_c(path,"mean_total.rds"))
+  
+  edx_data <- edx_data %>% 
+              group_by(movieId) %>% 
+              mutate(movie_mean = round(mean(rating - mean_total), digits = 4)) %>% 
+              ungroup() %>% 
+              group_by(userId) %>% 
+              mutate(user_mean = round(mean(rating - mean_total), digits = 4),
+                     movie_user = movie_mean*user_mean) %>% 
+              ungroup()
+  
+  # from title and timestamp get year_dif_mean and year_mean
+  
+  edx_data <- edx_data %>% 
+              mutate(year_m = str_extract(string = title, pattern = "\\([:digit:]{4}\\)"),
+                     year_m = str_replace_all(string = year_m, pattern = "\\(", replacement = ""),
+                     year_m = str_replace_all(string = year_m, pattern = "\\)", replacement = ""),
+                     year_m = as.numeric(year_m),
+                     timestamp = as_datetime(timestamp), 
+                     year_dif = as.numeric(year(timestamp)) - year_m,
+                     year_dif = ifelse(year_dif<0,0,year_dif)) %>%
+              group_by(year_dif) %>% 
+              mutate(year_dif_mean = round(mean(rating - mean_total), digits = 4)) %>% 
+              ungroup() %>% 
+              group_by(year_m) %>% 
+              mutate(year_mean = round(mean(rating - mean_total), digits = 4)) %>% 
+              ungroup()  
+  
+  write.csv(edx_data, file = str_c(path, "edx_data1.csv"))
+  
+  rm(edx_data)  # from now on, the data to be read is edx_data1
+  
+}
+
+```
+
+
+```{r feature ingeneering II}
+# This chunk of code is only evaluated once
+
+file <- str_c(path, "genres_df.rds") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  # the following function is used to collect all the different genres that appear in the data
+  genres_fun <- function(data) {
+                 
+                 genres_df <- data$genres %>% 
+                              str_split(pattern = "\\|") %>% 
+                              unlist %>% 
+                              as.vector() %>% 
+                              unique() %>% 
+                              as.data.frame() %>% 
+                              set_names(nm = "genre") %>% 
+                              mutate(genre = str_replace_all(string = genre, 
+                                                             pattern = "\\(", 
+                                                             replacement = ""),
+                                     genre = str_replace_all(string = genre, 
+                                                             pattern = "\\)", 
+                                                             replacement = "")) %>% 
+                              arrange(genre)
+                 
+                 return(genres_df)
+              
+  }
+  
+  saveRDS(genres_fun, "genres_fun.rds") # i will use again this function
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data.csv")) # original data
+  
+  # genres_df is a list that contains all genres in the sample
+  genres_df <- genres_fun(edx_data) 
+  
+  rm(edx_data, genres_fun)
+  
+  genres_list <-  genres_df$genre %>% 
+                  as.vector()  %>% 
+                  as.list() %>% 
+                  saveRDS(str_c(path, "genres_list.rds"))
+
+  # Once i have the list of existing genres i can create the categorical columns
+  genres_df <- genres_df %>% 
+               mutate(genre = str_replace_all(genre, "-| ", ".")) %>% 
+               saveRDS(str_c(path, "genres_df.rds"))
+  
+  rm(edx_data, genres_df, genres_list)
+  
+}
+
+```
+
+
+```{r feature ingeneering III}
+# this chunk is always evaluated
+genres_df <- readRDS(str_c(path, "genres_df.rds"))
+
+```
+
+The features that i created so far do not make use of the `genres` column. As indicated earlier, this column contains a list of pipe-separated of genre of each movie. Because a single movie can have several genres, the column cannot be used as a feature directly. Thus, i first proceed to unravel it into categorical columns, one for each genre. The total number of genres in the data are `r dim(genres_df)[1]`. Furthermore, I notice that, the training data has `r dim(genres_df)[1]` number of genres. Because all the movies in the testing data are also contained in the training data, i know `r dim(genres_df)[1]` is also the maximum number of genres needed in this analysis. In the second model I convert this data into dummy columns, one column for each genre. Notice that because the genres are not one-to-one the issue of multi-collinearity does not apply.
+
+```{r feature ingenereering IV}
+# This chunk of code is only evaluated once
+
+file <- str_c(path, "genres_data.csv") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  # the following function creates binary values for each gender identified in the data
+  gendata_fun <- function(x,y) {# x is every single genre in the data
+                            temp <- str_detect(y$genres, x) %>% 
+                                    as.data.frame() %>% 
+                                    set_names(unlist(x)) %>% 
+                                    mutate()
+                            
+                            temp[,1] <- temp[,1]*1
+                            
+                            # temp[,1] <- factor(temp[,1], levels = c("0", "1"))
+                            
+                            return(temp)
+                            
+  }
+  
+  saveRDS(gendata_fun, str_c(path, "gendata_fun.rds"))
+  
+  genres_list <- readRDS(str_c(path, "genres_list.rds")) # from previous chunk
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data.csv")) %>% # original data
+              select(genres)
+    
+  ind <- map( genres_list,  gendata_fun, edx_data) # create dummies
+  
+  genres_data <- bind_cols(lapply(ind, as.data.frame.list))
+  
+  write.csv(genres_data, file = str_c(path, "genres_data.csv"))
+  
+  rm(edx_data, genres_data, genres_list, gendata_fun, ind)
+  
+}
+
+```
+
+Finally, for the third and last model I also make use of the `genre` column, but because having that many columns for genres is not efficient I attempted to summarize the information. My approach was to obtain a "genre effect", as i did previously to construct other features. Then, because one movie may have more than one genre, I also took the average of the genre effects across all genres reported for each movie. These reduced the number of features considerably.
+
+```{r feature ingenereering V}
+
+file <- str_c(path, "genres_data2.csv")
+
+if (!file.exists(file)) {
+
+    genres_df <- readRDS(str_c(path, "genres_df.rds")) %>% unlist(use.names = FALSE)
+    
+    mean_total <- read_rds(str_c(path, "mean_total.rds"))
+    
+    genres_data <- read_csv(str_c(path, "genres_data.csv")) %>% 
+                   select(-X1)
+    
+    ratings <- read_csv(file = paste0(path, "edx_data1.csv")) %>% 
+               select( rating)
+    
+    genre_means_fun <- function(genr, genres_data, ratings, mean_total) {
+      
+      temp <- sum(genres_data[genr]*(ratings-mean_total), na.rm = TRUE)/sum(genres_data[genr], na.rm = TRUE) %>% 
+              unlist(use.names = FALSE)
+    
+      genres_data <- genres_data %>% 
+                     select(!!genr) %>% 
+                     mutate(!!genr := !!as.name(genr)*temp) 
+      
+    }
+    
+    genres_data <- map(genres_df, genre_means_fun, genres_data, ratings, mean_total) %>% 
+                  bind_cols(lapply(genres_df0, as.data.frame.list)) %>% 
+                  #select(-IMAX, -no.genres.listed) %>% 
+                  summarise(genre_mean = rowSums(.)/rowSums(.!=0)) 
+    
+    write.csv(genres_data, file = str_c(path, "genres_data2.csv"))
+    
+    rm(ratings,genres_df, genres_data)
+
+}
+
+                    
+```
+
+### Further exploration ###
+
+In the Introduction section I explored the original data to a certain extend. However, it is now worth it to also explore at least some of the features that I created afterwards. The following table shows the correlations between the `rating` and the five features first created.
+
+```{r table 2}
+
+temp <- read_csv( str_c(path, "edx_data1.csv")) %>% 
+        select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user)
+
+# table 3: correlation betwen numerical variables
+table2 <- rcorr(as.matrix(temp))[[1]] %>% 
+          as.data.frame()
+
+knitr::kable(table2, 
+             align = "ccc")
+
+```
+
+As observed above, the features with the highest correlation with `rating` are `movie_mean` and `user_mean`, in that order. It is also observed that `year_dif_mean` and `year_mean` are highly correlated, which is not ideal. This last could be because most reviews are about recent movies, and thus the variable `year_dif_mean` may be unbalanced towards low differences between the movie and the review. I can explore these (and more) ahead. First, I address the features that are directly comparable to the mean of `rating`. Thus, in the following table of statistics (and following graphs) I exclude `movie_user`.
+
+```{r table 3}
+
+getmode_fun <- function(v) {
+               uniqv <- unique(v)
+               uniqv[which.max(tabulate(match(v, uniqv)))]
+            }
+
+mysummary_fun <- function(vector, na.rm = FALSE, round = 2){
+                    results <- c(summary(vector), 
+                                 'Skewness' = skewness(vector, na.rm = FALSE, type = 3),
+                                 'Kurtosis' = kurtosis(vector, na.rm = FALSE, type = 3),
+                                 'Std. Dev' = sd(vector, na.rm))
+                    return(results)
+                  }
+
+table3 <- do.call(cbind, lapply(temp, mysummary_fun)) %>% 
+          as.data.frame() %>% 
+          tibble::rownames_to_column("Statistic") %>% 
+          mutate_if(is.numeric, round, digits=3) %>% 
+          select(-movie_user)
+
+knitr::kable(table3, 
+             align = "ccc")
+
+```
+
+Notice above that all features have mean zero. That is because they all are mean deviations. Then, notice that `user_mean` and `movie_mean` vary considerably more than `year_dif_mean` and `year_mean`. In fact, `year_dif_mean` and `year_mean` high coefficient of kurtosis indicate a high concentration around the mean. Finally, i also point out that the skewness coefficients indicate `user_mean` and `movie_mean` have a longer tail to the left of their mean, and conversely, `year_dif_mean` and `year_mean` have a longer tail to the right of their mean. Now, all these information is graphically represented bellow:
+
+```{r graph2}
+
+temp %>% 
+  ggplot() + 
+  geom_density(aes(x=user_mean, color= "firebrick")) +
+  geom_density(aes(x=movie_mean, color = "deepskyblue1")) +
+  scale_color_manual(name = "Features:", 
+                     values = c("firebrick" = "firebrick", 
+                                "deepskyblue1" = "deepskyblue1"),
+                     labels = c('user_mean','movie_mean')) +
+  theme_bw() +
+  xlab("Deviation from the mean") +
+  ylab("Density") +
+  ggtitle(label = "Densities of user_mean and movie_mean") 
+
+```
+
+
+```{r graph3}
+
+temp %>% 
+  ggplot() + 
+  geom_density(aes(x=year_mean, color = "goldenrod2")) + 
+  geom_density(aes(x=year_dif_mean, color = "darkgreen")) +
+  scale_color_manual(name = "Features:", 
+                     values = c("goldenrod2" = "goldenrod2", 
+                                "darkgreen" = "darkgreen"),
+                     labels = c('year_mean','year_dif_mean')) +
+  theme_bw() +
+  xlab("Deviation from the mean") +
+  ylab("Density") +
+  ggtitle(label = "Densities of year_mean and year_dif_mean")
+
+```
+Notice in the two graphs above that the ranges in the axes are considerably different. In fact, the two pairs of features cannot be represented together because the latter pair limits the visualization of the former pair. So far, I explored the features I obtained from other columns, with the exception of the column `genres`. To explore further the information contained in the `genres` column I present the following graph.
+
+```{r graph4}
+
+temp <- read_csv(str_c(path, "genres_data.csv")) %>%   
+        select(-X1) %>% 
+        map_dbl(sum) %>% 
+        as.data.frame() %>% 
+        set_names(c("Total")) %>% 
+        tibble::rownames_to_column("Genre") %>% 
+        mutate(Total = Total/10^3,
+               Total_format = format(round( Total,0), nsmall =0, big.mark = ",")) %>%
+        arrange(Total)
+
+temp  %>%
+  filter(Genre != "no.genres.listed") %>% 
+  mutate(Genre = factor(Genre, levels = unique(temp$Genre))) %>% 
+  ggplot(aes(x= Genre, y = Total)) +
+  geom_bar(aes(fill = Genre), stat="identity") +
+  geom_text(aes(label=Total_format),  hjust = -.01, size = 2.5) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  xlab("Genres") +
+  ylab("Number of reviews (thousands)") +
+  ggtitle(label = "Number of movie reviews by genre") + 
+  coord_flip()
+
+rm(temp)
+
+```
+
+As observed, the sum of all genres is higher than the original number of reviews. This again has to do with the fact that a single movie can have more than one genre. The most common genres are Drama, Comedy and Action, while IMAX and Documentary are the least common ones. One of my concerns so far is that the distribution of genres is quite unbalanced. Genres such as IMAX or Documentary are filled almost entirely by zeros, which is not efficient.
+
+### Models ###
+
+
+```{r linear model I caret}
+# This chunk of code is only evaluated once
+
+file <- str_c(path, "rmse_caret.rds") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% 
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) 
+  
+  model_LM <- caret::train(rating ~ ., 
+                          data = edx_data,
+                          method = "lm",
+                          trControl = trainControl( method = "cv", 
+                                                    number = 5,
+                                                    verboseIter = TRUE))
+  
+  saveRDS(model_LM, "model_LM1.rds")
+  
+  rmse_caret <- model_LM$results[[2]]
+  
+  saveRDS(rmse_caret, str_c(path, "rmse_caret.rds"))
+  
+  rm(edx_data, model_LM)
+  
+}
+
+rmse_caret <- readRDS(str_c(path, "rmse_caret.rds"))
+
+```
+
+- The first model I propose is a simple linear model using the 5 variables created initially, these are: `movie_mean`, `user_mean`, `year_dif_mean`, `year_mean` and `movie_user`. To have an idea of the performance of the model I first use the `caret` package for cross validation.  The results indicate the RMSE of the simple linear model would be approximately `r rmse_caret`.
+
+```{r linear model I}
+# This chunk of code is only evaluated once
+
+file <- str_c(path, "model_LM2.rds") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% 
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user)
+  
+  model_LM <- lm(rating ~ ., data = edx_data)
+  
+  saveRDS(model_LM, str_c(path, "model_LM2.rds") )
+  
+  rm(edx_data, model_LM)
+  
+}
+
+
+```
+
+- The second model I propose is also a linear model, but this time including 25 variables: the 5 from the previous model, as well as the `r dim(genres_df)[1]` dummy variable columns from the genre data. However, due to insurmountable computing limitations, I will not estimate the RMSE using cross validation.[^2]
+
+```{r linear model II}
+# This chunk of code is only evaluated once
+
+file <- str_c(path, "model_LM3.rds") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% # n_max
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) %>% 
+              bind_cols(read_csv(file = paste0(path, "genres_data.csv"))) %>% 
+              select(-X1)
+  
+  model_LM <- lm(rating ~ ., data = edx_data) 
+  
+  saveRDS(model_LM, str_c(path, "model_LM3.rds"))
+  
+  rm(edx_data, model_LM)
+  
+}
+
+```
+
+
+```{r linear model III caret}
+file <- str_c(path, "model_LM4.rds") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% # n_max
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) %>% 
+              bind_cols(read_csv(file = paste0(path, "genres_data2.csv"))) %>% 
+              select(-X1)
+  
+  model_LM <- caret::train(rating ~ ., 
+                          data = edx_data,
+                          method = "lm",
+                          trControl = trainControl( method = "cv", 
+                                                    number = 5,
+                                                    verboseIter = TRUE))
+  
+  saveRDS(model_LM, "model_LM4.rds")
+  
+  rmse_caret <- model_LM$results[[2]]
+  
+  saveRDS(rmse_caret, str_c(path, "rmse_caret2.rds"))
+  
+  rm(edx_data, model_LM)
+  
+}
+
+rmse_caret <- readRDS(str_c(path, "rmse_caret2.rds"))
+
+```
+
+- Finally, the third and last model in this project once more takes the features `movie_mean`, `user_mean`, `year_dif_mean`, `year_mean` and `movie_user`, but also adds the feature `genre_mean`, which is an average of the genre effect described earlier.  Despite that the computation constrains are lower, the improvement is not as large as expected. The results from cross validation indicate the RMSE of this model would be approximately `r rmse_caret`.
+
+```{r linear model III}
+file <- str_c(path, "model_LM5.rds") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% # n_max
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) %>% 
+              bind_cols(read_csv(file = paste0(path, "genres_data2.csv"))) %>% 
+              select(-X1)
+  
+  model_LM <- lm(rating ~ ., data = edx_data) 
+  
+  saveRDS(model_LM, str_c(path, "model_LM5.rds"))
+  
+  rm(edx_data, model_LM)
+  
+}
+```
+
+
+## Results ##
+
+Because the objective of this project is to predict the ratings from the validating data, i cannot obtain the features in the same way as i did with the training data. Doing so would imply using the result (rating column) before testing the model. Instead, i can use the other columns in the validation set together with the training set to create the features for the model. This certainly is not usual, but it is a way of ensuring the validity of the results.
+
+To be clear, what I did is, for example, to match the variable `movie_mean` in the validation data and the training data to get the feature `movie_mean` into the validation data. This process can be repeated to `user_mean`, `year_dif_mean`, and `year_mean`. The last feature in the first model, `movie_user`, is obtained as before, by multiplying  `movie_mean` and `user_mean`.
+
+```{r preparing validation data I}
+# This chunk of code is only evaluated once
+
+file <- paste0(path, "val_data2.csv") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  # first, apply the initial transformations of features
+  val_data <- read_csv(file = paste0(path, "validation.csv"))  %>% 
+              mutate(year_m = str_extract(string = title, pattern = "\\([:digit:]{4}\\)"),
+                     year_m = str_replace_all(string = year_m, pattern = "\\(", replacement = ""),
+                     year_m = str_replace_all(string = year_m, pattern = "\\)", replacement = ""),
+                     year_m = as.numeric(year_m),
+                     timestamp = as_datetime(timestamp), 
+                     year_dif = as.numeric(year(timestamp)) - year_m,
+                     year_dif = ifelse(year_dif<0,0,year_dif))
+  
+  # recovering the features is done by matching vectors old vs new:
+  old <- c("userId", "movieId", "year_m", "year_dif")
+  
+  new <- c("user_mean", "movie_mean", "year_mean", "year_dif_mean")
+  
+  for (i in 1:4) {
+    
+    edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% 
+                select( old[i],new[i]) %>% 
+                mutate(!!new[i] := round(!!sym(new[i]), digits = 4)) %>% 
+                unique()
+  
+    val_data <- val_data %>% 
+                left_join(edx_data, by = old[i])
+    
+  }
+  
+  val_data <- val_data %>% 
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean) %>%
+              mutate(movie_user = movie_mean*user_mean)
+  
+  write.csv(x =val_data, file = paste0(path, "val_data2.csv"))
+  
+  rm(edx_data, val_data)
+  
+}
+
+rmse_caret <- read_rds(str_c(path, "rmse_caret.rds"))
+
+
+```
+
+The features `user_mean`, `movie_mean`, `year_diff_mean`, `year_mean` and `movie_user` are sufficient for the first model. However, recall that the other two models require making use of the genres column. This time, the `genres` column in the validation data is sufficient and I can use the exact same functions to unravel the genres into dummy variables.
+
+```{r preparing validation data II}
+# This chunk of code is only evaluated once
+
+file <- paste0(path, "val_data3.csv") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  genres_list <- read_rds(str_c(path, "genres_list.rds"))
+  gendata_fun <- read_rds(str_c(path, "gendata_fun.rds"))
+  
+  val_data <- read_csv(file = paste0(path, "validation.csv")) 
+  
+  ind <- map( genres_list,  gendata_fun, val_data) # create dummies
+  
+  genres_data <- bind_cols(lapply(ind, as.data.frame.list))
+  
+  val_data <- read_csv(file = paste0(path, "val_data2.csv"))%>% 
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) %>% 
+              bind_cols(genres_data)
+  
+  write.csv(x =val_data, file = paste0(path, "val_data3.csv"))
+  
+  rm(genres_data, val_data, ind, genres_list, gendata_fun)
+  
+}
+  
+```
+
+```{r preparing validation data III}
+# This chunk of code is only evaluated once
+
+file <- paste0(path, "val_data4.csv") # file exported in this chunk
+
+if (!file.exists(file)) {
+  
+  edx_data <- read_csv(file = paste0(path, "edx_data1.csv")) %>% 
+              select( movieId) %>% 
+              bind_cols(read_csv(file = paste0(path, "genres_data2.csv"))) %>% 
+              select(-X1) %>% 
+              unique()   
+  
+  val_data <- read_csv(file = paste0(path, "val_data2.csv"))%>% 
+              select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) %>% 
+              bind_cols(select(read_csv(file = paste0(path, "validation.csv")), movieId)) %>% 
+              left_join(edx_data, by = "movieId") %>% 
+              select(-movieId)
+  
+  write.csv(x =val_data, file = paste0(path, "val_data4.csv"))
+  
+  rm(edx_data, val_data)
+  
+}
+  
+```
+
+```{r RMSE I}
+
+val_data <- read_csv(file = paste0(path, "val_data2.csv")) %>% 
+            select(rating, user_mean, movie_mean, year_dif_mean, year_mean, movie_user) 
+
+model <- readRDS(file = paste0(path, "model_LM2.rds"))
+
+RMSE <- RMSE( predict(model, val_data), val_data$rating)
+
+```
+
+```{r RMSE II}
+
+val_data <- read_csv(file = paste0(path, "val_data3.csv")) %>% 
+            select(-X1) 
+
+model <- readRDS(file = paste0(path, "model_LM3.rds"))
+
+RMSE <- c(RMSE, RMSE( predict(model, val_data), val_data$rating))
+
+
+```
+
+```{r RMSE III}
+
+val_data <- read_csv(file = paste0(path, "val_data4.csv")) %>% 
+            select(-X1) 
+
+model <- readRDS(file = paste0(path, "model_LM5.rds"))
+
+
+RMSE <- c(RMSE, RMSE( predict(model, val_data), val_data$rating))
+
+
+rm(model)
+
+```
+
+As for the final results, recall that the RMSE obtained from cross validation was around `r round(rmse_caret, digits = 4)`. So, I expect values close to that number. Indeed, the outcomes from the first and third models are RMSEs of `r RMSE[1]` and `r RMSE[3]`, respectively, which is good, but could be better. The second model improved the RMSE, but only marginally to `r RMSE[2]`. Given that the second model required considerable additional time and computing resources, and provided little benefit, I consider the third model a better option, and thus my selected model. 
+
+```{r table 4}
+
+Models <- c("Linear model 1", "Linear model 2", "Linear model 3")
+
+number <- c(5, 25, 6)
+
+table4 <- data.frame(Models, RMSE, number)
+
+# this chunk is always evaluated
+kable(table4, 
+      align = "ccc", 
+      col.names = c("", 
+                    "RMSE", 
+                    "Number of variables"))
+
+```
+
+### Conclusion ###
+
+In this project I was given a large data set and was tasked to run a machine learning model to predict ratings of movies. After data exploration and manipulation, I came up with three models, one with 5, one with 6 and anoother with 25 features. The final hold-out test in this project resulted into a RMSE close to `r round(RMSE[2], digits = 2)`, which was not enough to reach the target mark of 0.86490. However, I believe that this project has solid insights and attempted to follow innovative ideas.
+
+Regarding my final considerations, I believe that if I had at my disposal a more powerful computer I might have attempted feature selection methods  or even attempted to reduce the dimensions of the data in the second model. Unfortunately, that was not feasible. I also believe that more sophisticated ML models such as Support vector Machine or Random Forest could considerably improve the outcome. Likewise, such alternatives were not feasible. Yet, I also conclude that this project allowed me to put into practice my skills in R and motivated me to continue learning. In particular the project got me interested about the topic of distributed data algorithms and machine learning on the cloud. I hope that in the near future, the specifications of my personal computer will not be a true limitation for my data science projects.
+
+<Foot notes>
+
+[^1]: Note: Due to computing restrictions, I have written the code in a way in which chunks are self-contained. In particular, code that generates new objects is evaluated only once. Since the objects are saved, they can be imported when needed, without using memory unnecessarily. Unfortunately, this slows down the code because importing and exporting is slow. However, this strategy saves time when publishing the report.
+
+[^2]: I am aware that this project asks to use cross validation on all models. However, it simply was not an option for me. I was not able to find a computer with sufficient memory to run the models, and certainly not enough to do cross validation. I eventually was able to borrow a computer with sufficient memory to run a simple model and save the results. I hope this suffices and is taken into consideration for this project´s evaluation.
